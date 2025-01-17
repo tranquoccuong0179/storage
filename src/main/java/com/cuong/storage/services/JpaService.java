@@ -2,6 +2,7 @@ package com.cuong.storage.services;
 
 import com.cuong.storage.model.User;
 import jakarta.persistence.EntityManager;
+import jakarta.persistence.NoResultException;
 import jakarta.persistence.TypedQuery;
 
 import java.util.List;
@@ -19,9 +20,13 @@ public class JpaService {
     }
 
     public User getUserByUsername(String username) {
-        TypedQuery<User> query = em.createNamedQuery("getUserByUsername", User.class);
-        query.setParameter("username", username);
-        return query.getSingleResult();
+        try {
+            TypedQuery<User> query = em.createNamedQuery("getUserByUsername", User.class);
+            query.setParameter("username", username);
+            return query.getSingleResult(); // Trả về đối tượng nếu tìm thấy
+        } catch (NoResultException e) {
+            return null; // Nếu không tìm thấy đối tượng, trả về null
+        }
     }
 
     public User getUserByEmail(String email) {
@@ -60,6 +65,10 @@ public class JpaService {
         return query.getResultStream();
     }
 
+    public int getUserCountNonImplement() {
+        return 0;
+    }
+
 //    public Stream<User> searchForRole(String searchTerm, Integer firstResult, Integer maxResults) {
 //        String search = (searchTerm == null) ? "" : searchTerm;
 //        TypedQuery<User> query = em.createNamedQuery("searchForRole", User.class);
@@ -75,7 +84,4 @@ public class JpaService {
 //        return query.getResultStream();
 //    }
 
-    public int getUserCountNonImplement() {
-        return 0;
-    }
 }

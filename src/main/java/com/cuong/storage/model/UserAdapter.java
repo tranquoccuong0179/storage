@@ -23,9 +23,11 @@ public class UserAdapter extends AbstractUserAdapterFederatedStorage {
     public UserAdapter(KeycloakSession session, RealmModel realm, ComponentModel model, User entity) {
         super(session, realm, model);
         this.entity = entity;
+        this.session = session;
         this.keycloakId = StorageId.keycloakId(model, entity.getId());
         this.model = model;
     }
+
 
     @Override
     public SubjectCredentialManager credentialManager() {
@@ -71,12 +73,16 @@ public class UserAdapter extends AbstractUserAdapterFederatedStorage {
     @Override
     public Map<String, List<String>> getAttributes() {
         MultivaluedHashMap<String, String> attributes = new MultivaluedHashMap<>();
-        attributes.add(UserModel.USERNAME, getUsername());
-        attributes.add(UserModel.EMAIL, getEmail());
-        attributes.add(UserModel.FIRST_NAME, getFirstName());
-        attributes.add(UserModel.LAST_NAME, getLastName());
-        for (Map.Entry<String, String> param : entity.getAttributes().entrySet()) {
-            attributes.add(param.getKey(), param.getValue());
+        if (entity != null) {
+            attributes.add(UserModel.USERNAME, getUsername());
+            attributes.add(UserModel.EMAIL, getEmail());
+            attributes.add(UserModel.FIRST_NAME, getFirstName());
+            attributes.add(UserModel.LAST_NAME, getLastName());
+            if (entity.getAttributes() != null) {
+                for (Map.Entry<String, String> param : entity.getAttributes().entrySet()) {
+                    attributes.add(param.getKey(), param.getValue());
+                }
+            }
         }
         return attributes;
     }
@@ -84,14 +90,15 @@ public class UserAdapter extends AbstractUserAdapterFederatedStorage {
     @Override
     public Stream<String> getAttributeStream(String name) {
         Map<String, List<String>> attributes = getAttributes();
-        return (attributes.containsKey(name)) ? attributes.get(name).stream() : Stream.empty();
+        return (attributes != null && attributes.containsKey(name)) ? attributes.get(name).stream() : Stream.empty();
     }
 
     @Override
     public String getFirstAttribute(String name) {
         List<String> list = getAttributes().getOrDefault(name, List.of());
-        return list.isEmpty() ? null : list.get(0);
+        return (list != null && !list.isEmpty()) ? list.get(0) : null;
     }
+
 
 //    @Override
 //    public Stream<RoleModel> getRoleMappingsStream() {

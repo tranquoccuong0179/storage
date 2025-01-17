@@ -262,7 +262,22 @@ public class CustomUserStorageProvider implements UserStorageProvider,
      */
     @Override
     public UserModel addUser(RealmModel realm, String username) {
-        return null;
+        // Tạo đối tượng người dùng mới trong DB bên ngoài
+        User newUser = new User();
+        newUser.setUsername(username);
+
+        // Lưu đối tượng vào DB bên ngoài qua JpaService
+        try {
+            em.getTransaction().begin();
+            em.persist(newUser);
+            em.getTransaction().commit();
+        } catch (Exception e) {
+            logger.severe("Failed to create user in external DB: " + e.getMessage());
+            return null;
+        }
+
+        // Ánh xạ người dùng mới vào UserModel của Keycloak thông qua UserAdapter
+        return new UserAdapter(session, realm, model, newUser);
     }
 
     /**
