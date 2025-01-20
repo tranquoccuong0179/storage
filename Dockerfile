@@ -10,7 +10,7 @@ RUN mkdir -p /opt/keycloak/providers/
 # Copy the custom provider JAR file into the container
 COPY target/storage-0.0.1-SNAPSHOT.jar /opt/keycloak/providers/
 
-
+COPY spring-security-crypto-6.4.1.jar /opt/keycloak/providers/
 # Copy keycloak.conf
 COPY conf/quarkus.properties /opt/keycloak/conf/
 #COPY conf/keycloak.conf /opt/keycloak/conf/keycloak.conf

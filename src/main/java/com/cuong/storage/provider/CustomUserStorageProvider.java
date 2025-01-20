@@ -37,7 +37,7 @@ public class CustomUserStorageProvider implements UserStorageProvider, UserRegis
     private KeycloakSession keycloakSession;
     private Connection connection;
 
-//    private final BCryptPasswordEncoder passwordEncoder = new BCryptPasswordEncoder();
+    private final BCryptPasswordEncoder passwordEncoder = new BCryptPasswordEncoder();
 
     public void setModel(ComponentModel componentModel) {
         this.componentModel = componentModel;
@@ -62,6 +62,62 @@ public class CustomUserStorageProvider implements UserStorageProvider, UserRegis
         } catch (SQLException e) {
             logger.error("Error closing database connection", e);
         }
+    }
+
+    @Override
+    public UserModel addUser(RealmModel realmModel, String username) {
+        logger.info("Attempting to add user with username: {}", username);
+        String query = "INSERT INTO users (username) VALUES (?)";
+        try (PreparedStatement stmt = connection.prepareStatement(query, Statement.RETURN_GENERATED_KEYS)) {
+            stmt.setString(1, username);
+            stmt.executeUpdate();
+
+            try (ResultSet generatedKeys = stmt.getGeneratedKeys()) {
+                if (generatedKeys.next()) {
+                    long id = generatedKeys.getLong(1);
+                    logger.info("User successfully added with ID: {} and username: {}", id, username);
+
+                    User user = new User();
+                    user.setId(id);
+                    user.setUsername(username);
+
+                    return new UserAdapter(keycloakSession, realmModel, componentModel, user, connection);
+                } else {
+                    logger.error("Failed to retrieve generated ID for user: {}", username);
+                }
+            }
+        } catch (SQLException e) {
+            logger.error("Error adding user", e);
+        }
+        return null;
+    }
+
+    @Override
+    public UserModel getUserById(RealmModel realmModel, String id) {
+        logger.info("Attempting to find user by ID: {}", id);
+        long persistenceId;
+        try {
+            persistenceId = Long.parseLong(StorageId.externalId(id));
+        } catch (NumberFormatException e) {
+            logger.error("Invalid ID format: {}", id, e);
+            return null;
+        }
+
+        String query = "SELECT * FROM users WHERE id = ?";
+        try (PreparedStatement stmt = connection.prepareStatement(query)) {
+            stmt.setLong(1, persistenceId);
+            ResultSet rs = stmt.executeQuery();
+            if (rs.next()) {
+                logger.info("User found with ID: {}", id);
+                User user = mapRowToUser(rs);
+                return new UserAdapter(keycloakSession, realmModel, componentModel, user, connection);
+            } else {
+                logger.warn("No user found with ID: {}", id);
+            }
+        } catch (SQLException e) {
+            logger.error("Error finding user by ID", e);
+        }
+        return null;
     }
 
     @Override
@@ -100,62 +156,6 @@ public class CustomUserStorageProvider implements UserStorageProvider, UserRegis
             }
         } catch (SQLException e) {
             logger.error("Error finding user by email", e);
-        }
-        return null;
-    }
-
-    @Override
-    public UserModel getUserById(RealmModel realmModel, String id) {
-        logger.info("Attempting to find user by ID: {}", id);
-        long persistenceId;
-        try {
-            persistenceId = Long.parseLong(StorageId.externalId(id));
-        } catch (NumberFormatException e) {
-            logger.error("Invalid ID format: {}", id, e);
-            return null;
-        }
-
-        String query = "SELECT * FROM users WHERE id = ?";
-        try (PreparedStatement stmt = connection.prepareStatement(query)) {
-            stmt.setLong(1, persistenceId);
-            ResultSet rs = stmt.executeQuery();
-            if (rs.next()) {
-                logger.info("User found with ID: {}", id);
-                User user = mapRowToUser(rs);
-                return new UserAdapter(keycloakSession, realmModel, componentModel, user, connection);
-            } else {
-                logger.warn("No user found with ID: {}", id);
-            }
-        } catch (SQLException e) {
-            logger.error("Error finding user by ID", e);
-        }
-        return null;
-    }
-
-    @Override
-    public UserModel addUser(RealmModel realmModel, String username) {
-        logger.info("Attempting to add user with username: {}", username);
-        String query = "INSERT INTO users (username) VALUES (?)";
-        try (PreparedStatement stmt = connection.prepareStatement(query, Statement.RETURN_GENERATED_KEYS)) {
-            stmt.setString(1, username);
-            stmt.executeUpdate();
-
-            try (ResultSet generatedKeys = stmt.getGeneratedKeys()) {
-                if (generatedKeys.next()) {
-                    long id = generatedKeys.getLong(1);
-                    logger.info("User successfully added with ID: {} and username: {}", id, username);
-
-                    User user = new User();
-                    user.setId(id);
-                    user.setUsername(username);
-
-                    return new UserAdapter(keycloakSession, realmModel, componentModel, user, connection);
-                } else {
-                    logger.error("Failed to retrieve generated ID for user: {}", username);
-                }
-            }
-        } catch (SQLException e) {
-            logger.error("Error adding user", e);
         }
         return null;
     }
@@ -211,9 +211,9 @@ public class CustomUserStorageProvider implements UserStorageProvider, UserRegis
             if (rs.next()) {
                 String storedPassword = rs.getString("password");
                 logger.info("storedPassword: ", storedPassword);
-//                boolean isValid = passwordEncoder.matches(credentialInput.getChallengeResponse(), storedPassword);
-//                logger.info("Credential validation result for user {}: {}", user.getUsername(), isValid);
-                return true;
+                boolean isValid = passwordEncoder.matches(credentialInput.getChallengeResponse(), storedPassword);
+                logger.info("Credential validation result for user {}: {}", user.getUsername(), isValid);
+                return isValid;
             } else {
                 logger.warn("No password found for user: {}", user.getUsername());
             }
@@ -283,11 +283,11 @@ public class CustomUserStorageProvider implements UserStorageProvider, UserRegis
     public boolean updateCredential(RealmModel realm, UserModel user, CredentialInput input) {
         if (input instanceof UserCredentialModel && input.getType().equals(CredentialModel.PASSWORD)) {
             String newPassword = ((UserCredentialModel) input).getValue();
-//            String hashedPassword = passwordEncoder.encode(newPassword);
+            String hashedPassword = passwordEncoder.encode(newPassword);
 
             String query = "UPDATE users SET password = ? WHERE username = ?";
             try (PreparedStatement stmt = connection.prepareStatement(query)) {
-//                stmt.setString(1, hashedPassword);
+                stmt.setString(1, hashedPassword);
                 stmt.setString(2, user.getUsername());
                 int rowsUpdated = stmt.executeUpdate();
                 if (rowsUpdated > 0) {

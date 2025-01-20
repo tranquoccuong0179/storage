@@ -13,9 +13,6 @@ import java.sql.DriverManager;
 import java.sql.SQLException;
 import java.util.List;
 
-import static com.cuong.storage.constants.JpaStorageProviderConstants.ADD_ROLES_TO_TOKEN;
-import static com.cuong.storage.constants.JpaStorageProviderConstants.PROVIDER_NAME;
-
 public class CustomUserStorageProviderFactory implements UserStorageProviderFactory<CustomUserStorageProvider> {
 
     private Connection connection;
