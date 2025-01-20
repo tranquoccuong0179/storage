@@ -13,7 +13,7 @@ COPY target/storage-0.0.1-SNAPSHOT.jar /opt/keycloak/providers/
 
 # Copy keycloak.conf
 COPY conf/quarkus.properties /opt/keycloak/conf/
-COPY conf/keycloak.conf /opt/keycloak/conf/keycloak.conf
+#COPY conf/keycloak.conf /opt/keycloak/conf/keycloak.conf
 
 # Ensure the "keycloak" user has access to the "providers" directory and configuration files
 RUN chown -R keycloak:keycloak /opt/keycloak/providers/ /opt/keycloak/conf/

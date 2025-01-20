@@ -7,6 +7,9 @@ import org.keycloak.models.*;
 import org.keycloak.storage.StorageId;
 import org.keycloak.storage.adapter.AbstractUserAdapterFederatedStorage;
 
+import java.sql.Connection;
+import java.sql.PreparedStatement;
+import java.sql.SQLException;
 import java.util.List;
 import java.util.Map;
 import java.util.logging.Logger;
@@ -14,111 +17,103 @@ import java.util.stream.Stream;
 
 public class UserAdapter extends AbstractUserAdapterFederatedStorage {
 
-    private static final Logger logger = Logger.getLogger(String.valueOf(UserAdapter.class));
+    private final String id;
+    private final User user;
+    private final Connection connection;
 
-    protected ComponentModel model;
-    protected User entity;
-    protected String keycloakId;
-
-    public UserAdapter(KeycloakSession session, RealmModel realm, ComponentModel model, User entity) {
-        super(session, realm, model);
-        this.entity = entity;
-        this.session = session;
-        this.keycloakId = StorageId.keycloakId(model, entity.getId());
-        this.model = model;
-    }
-
-
-    @Override
-    public SubjectCredentialManager credentialManager() {
-        logger.info("[credentialManager] new UserCredentialManager...");
-        return new UserCredentialManager(session, realm, this);
-    }
-
-    @Override
-    public String getId() {
-        return keycloakId;
+    public UserAdapter(KeycloakSession session, RealmModel realm, ComponentModel storageProviderModel, User user, Connection connection) {
+        super(session, realm, storageProviderModel);
+        this.user = user;
+        this.id = StorageId.keycloakId(storageProviderModel, user.getId().toString());
+        this.connection = connection;
     }
 
     @Override
     public String getUsername() {
-        return entity.getUsername();
+        return user.getUsername();
     }
 
     @Override
-    public void setUsername(String username) {
-        entity.setUsername(username);
+    public void setUsername(String s) {
+        user.setUsername(s);
     }
 
     @Override
-    public boolean isEmailVerified() {
-        return entity.isEmailVerified();
+    public String getId(){
+        return id;
     }
 
     @Override
-    public String getEmail() {
-        return entity.getEmail();
+    public String getEmail(){
+        return user.getEmail();
+    }
+
+    public String getPassword() {
+        return user.getPassword();
     }
 
     @Override
-    public String getFirstName() {
-        return entity.getFirstName();
+    public void setEmail(String email) {
+        super.setEmail(email);
+        updateDatabase("email", email);
     }
 
     @Override
-    public String getLastName() {
-        return entity.getLastName();
+    public void setFirstName(String firstName) {
+        super.setFirstName(firstName);
+        updateDatabase("firstname", firstName);
     }
 
     @Override
-    public Map<String, List<String>> getAttributes() {
-        MultivaluedHashMap<String, String> attributes = new MultivaluedHashMap<>();
-        if (entity != null) {
-            attributes.add(UserModel.USERNAME, getUsername());
-            attributes.add(UserModel.EMAIL, getEmail());
-            attributes.add(UserModel.FIRST_NAME, getFirstName());
-            attributes.add(UserModel.LAST_NAME, getLastName());
-            if (entity.getAttributes() != null) {
-                for (Map.Entry<String, String> param : entity.getAttributes().entrySet()) {
-                    attributes.add(param.getKey(), param.getValue());
-                }
-            }
+    public void setLastName(String lastName) {
+        super.setLastName(lastName);
+        updateDatabase("lastname", lastName);
+    }
+
+    @Override
+    public void setAttribute(String name, List<String> values) {
+        super.setAttribute(name, values);
+        if ("firstName".equals(name)) {
+            updateDatabase("firstname", values.get(0));
+        } else if ("lastName".equals(name)) {
+            updateDatabase("lastname", values.get(0));
+        } else if ("email".equals(name)) {
+            updateDatabase("email", values.get(0));
         }
-        return attributes;
     }
 
-    @Override
-    public Stream<String> getAttributeStream(String name) {
-        Map<String, List<String>> attributes = getAttributes();
-        return (attributes != null && attributes.containsKey(name)) ? attributes.get(name).stream() : Stream.empty();
+    private void updateDatabase(String field, String value) {
+        String query = "UPDATE users SET " + field + " = ? WHERE id = ?";
+        try (PreparedStatement stmt = connection.prepareStatement(query)) {
+            stmt.setString(1, value);
+            stmt.setLong(2, Long.parseLong(StorageId.externalId(getId())));
+            stmt.executeUpdate();
+        } catch (SQLException e) {
+            e.printStackTrace();
+        }
     }
 
-    @Override
-    public String getFirstAttribute(String name) {
-        List<String> list = getAttributes().getOrDefault(name, List.of());
-        return (list != null && !list.isEmpty()) ? list.get(0) : null;
-    }
-
-
-//    @Override
-//    public Stream<RoleModel> getRoleMappingsStream() {
-//        Stream<RoleModel> roleMappings = super.getRoleMappingsStream();
-//        boolean addFederationRoles = Boolean.parseBoolean(model.get(ADD_ROLES_TO_TOKEN));
-//        if (!addFederationRoles) {
-//            return roleMappings;
+//    private void updateDatabase(String field, String value) {
+//        List<String> validFields = Arrays.asList("name", "email", "phone");
+//        if (!validFields.contains(field)) {
+//            throw new IllegalArgumentException("Invalid field: " + field);
 //        }
 //
-//        String[] roleArr = entity.getRoles().split(",");
-//        for (String role : roleArr) {
-//            RoleModel roleModel = realm.getRole(role);
-//            if (roleModel == null) {
-//                roleModel = realm.addRole(role);
+//        String query = "UPDATE users SET " + field + " = ? WHERE id = ?";
+//        try (PreparedStatement stmt = connection.prepareStatement(query)) {
+//            stmt.setString(1, value);
+//            stmt.setLong(2, Long.parseLong(StorageId.externalId(getId())));
+//            int rowsUpdated = stmt.executeUpdate();
+//
+//            if (rowsUpdated > 0) {
+//                System.out.println("Update successful: " + rowsUpdated + " rows updated.");
+//            } else {
+//                System.out.println("No rows were updated.");
 //            }
-////            log("Granting role %s to user %s during user import from Remote", role, username);
-////            this.grantRole(roleModel);
-//            roleMappings = Stream.concat(roleMappings, Stream.of(roleModel));
+//        } catch (SQLException e) {
+//            e.printStackTrace();
+//            throw new RuntimeException("Database update failed", e);
 //        }
-//        return roleMappings;
 //    }
 }
 

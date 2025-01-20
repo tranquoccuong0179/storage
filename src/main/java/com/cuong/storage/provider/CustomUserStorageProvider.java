@@ -3,13 +3,14 @@ package com.cuong.storage.provider;
 import at.favre.lib.crypto.bcrypt.BCrypt;
 import com.cuong.storage.model.User;
 import com.cuong.storage.model.UserAdapter;
-import com.cuong.storage.services.JpaService;
 import jakarta.persistence.EntityManager;
 import jakarta.persistence.TypedQuery;
 import org.keycloak.component.ComponentModel;
 import org.keycloak.connections.jpa.JpaConnectionProvider;
 import org.keycloak.credential.CredentialInput;
+import org.keycloak.credential.CredentialInputUpdater;
 import org.keycloak.credential.CredentialInputValidator;
+import org.keycloak.credential.CredentialModel;
 import org.keycloak.models.*;
 import org.keycloak.models.credential.PasswordCredentialModel;
 import org.keycloak.storage.StorageId;
@@ -17,278 +18,306 @@ import org.keycloak.storage.UserStorageProvider;
 import org.keycloak.storage.user.UserLookupProvider;
 import org.keycloak.storage.user.UserQueryProvider;
 import org.keycloak.storage.user.UserRegistrationProvider;
+import org.slf4j.LoggerFactory;
+import org.springframework.security.crypto.bcrypt.BCryptPasswordEncoder;
 
+import java.sql.*;
+import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
 import java.util.logging.Logger;
 import java.util.stream.Stream;
 
-public class CustomUserStorageProvider implements UserStorageProvider,
-        UserLookupProvider,
-        UserRegistrationProvider,
-        UserQueryProvider,
-        CredentialInputValidator {
+public class CustomUserStorageProvider implements UserStorageProvider, UserRegistrationProvider, UserQueryProvider, UserLookupProvider, CredentialInputValidator, CredentialInputUpdater {
 
-    private static final Logger logger = Logger.getLogger(String.valueOf(CustomUserStorageProvider.class));
+    private static final org.slf4j.Logger logger = LoggerFactory.getLogger(CustomUserStorageProvider.class);
 
-    protected EntityManager em;
-    protected JpaService js;
+    private ComponentModel componentModel;
+    private KeycloakSession keycloakSession;
+    private Connection connection;
 
-    protected ComponentModel model;
-    protected KeycloakSession session;
+//    private final BCryptPasswordEncoder passwordEncoder = new BCryptPasswordEncoder();
 
-    CustomUserStorageProvider(KeycloakSession session, ComponentModel model) {
-        this.session = session;
-        this.model = model;
-        EntityManager em = session.getProvider(JpaConnectionProvider.class, "user-store").getEntityManager();
-        this.js = new JpaService(em);
+    public void setModel(ComponentModel componentModel) {
+        this.componentModel = componentModel;
+    }
+
+    public void setSession(KeycloakSession keycloakSession) {
+        this.keycloakSession = keycloakSession;
+    }
+
+    public void setConnection(Connection connection) {
+        this.connection = connection;
+    }
+
+    @Override
+    public void close() {
+        logger.info("Closing database connection.");
+        try {
+            if (connection != null && !connection.isClosed()) {
+                connection.close();
+                logger.info("Database connection closed successfully.");
+            }
+        } catch (SQLException e) {
+            logger.error("Error closing database connection", e);
+        }
+    }
+
+    @Override
+    public UserModel getUserByUsername(RealmModel realmModel, String username) {
+        logger.info("Attempting to find user by username: {}", username);
+        String query = "SELECT * FROM users WHERE username = ?";
+        try (PreparedStatement stmt = connection.prepareStatement(query)) {
+            stmt.setString(1, username);
+            ResultSet rs = stmt.executeQuery();
+            if (rs.next()) {
+                logger.info("User found with username: {}", username);
+                User user = mapRowToUser(rs);
+                return new UserAdapter(keycloakSession, realmModel, componentModel, user, connection);
+            }else {
+                logger.warn("No user found with username: {}", username);
+            }
+        } catch (SQLException e) {
+            logger.error("Error finding user by username", e);
+        }
+        return null;
+    }
+
+    @Override
+    public UserModel getUserByEmail(RealmModel realmModel, String email) {
+        logger.info("Attempting to find user by email: {}", email);
+        String query = "SELECT * FROM users WHERE email = ?";
+        try (PreparedStatement stmt = connection.prepareStatement(query)) {
+            stmt.setString(1, email);
+            ResultSet rs = stmt.executeQuery();
+            if (rs.next()) {
+                logger.info("User found with email: {}", email);
+                User user = mapRowToUser(rs);
+                return new UserAdapter(keycloakSession, realmModel, componentModel, user, connection);
+            }else {
+                logger.warn("No user found with email: {}", email);
+            }
+        } catch (SQLException e) {
+            logger.error("Error finding user by email", e);
+        }
+        return null;
+    }
+
+    @Override
+    public UserModel getUserById(RealmModel realmModel, String id) {
+        logger.info("Attempting to find user by ID: {}", id);
+        long persistenceId;
+        try {
+            persistenceId = Long.parseLong(StorageId.externalId(id));
+        } catch (NumberFormatException e) {
+            logger.error("Invalid ID format: {}", id, e);
+            return null;
+        }
+
+        String query = "SELECT * FROM users WHERE id = ?";
+        try (PreparedStatement stmt = connection.prepareStatement(query)) {
+            stmt.setLong(1, persistenceId);
+            ResultSet rs = stmt.executeQuery();
+            if (rs.next()) {
+                logger.info("User found with ID: {}", id);
+                User user = mapRowToUser(rs);
+                return new UserAdapter(keycloakSession, realmModel, componentModel, user, connection);
+            } else {
+                logger.warn("No user found with ID: {}", id);
+            }
+        } catch (SQLException e) {
+            logger.error("Error finding user by ID", e);
+        }
+        return null;
+    }
+
+    @Override
+    public UserModel addUser(RealmModel realmModel, String username) {
+        logger.info("Attempting to add user with username: {}", username);
+        String query = "INSERT INTO users (username) VALUES (?)";
+        try (PreparedStatement stmt = connection.prepareStatement(query, Statement.RETURN_GENERATED_KEYS)) {
+            stmt.setString(1, username);
+            stmt.executeUpdate();
+
+            try (ResultSet generatedKeys = stmt.getGeneratedKeys()) {
+                if (generatedKeys.next()) {
+                    long id = generatedKeys.getLong(1);
+                    logger.info("User successfully added with ID: {} and username: {}", id, username);
+
+                    User user = new User();
+                    user.setId(id);
+                    user.setUsername(username);
+
+                    return new UserAdapter(keycloakSession, realmModel, componentModel, user, connection);
+                } else {
+                    logger.error("Failed to retrieve generated ID for user: {}", username);
+                }
+            }
+        } catch (SQLException e) {
+            logger.error("Error adding user", e);
+        }
+        return null;
+    }
+
+    @Override
+    public boolean removeUser(RealmModel realmModel, UserModel userModel) {
+        logger.info("Attempting to remove user with ID: {}", userModel.getId());
+        String query = "DELETE FROM users WHERE id = ?";
+        try (PreparedStatement stmt = connection.prepareStatement(query)) {
+            long persistenceId;
+            try {
+                persistenceId = Long.parseLong(StorageId.externalId(userModel.getId()));
+            } catch (NumberFormatException e) {
+                logger.error("Invalid ID format: {}", userModel.getId(), e);
+                return false;
+            }
+
+            stmt.setLong(1, persistenceId);
+            int rowsAffected = stmt.executeUpdate();
+            if (rowsAffected > 0) {
+                logger.info("User successfully removed with ID: {}", userModel.getId());
+                return true;
+            } else {
+                logger.warn("No user found with ID: {} to remove", userModel.getId());
+            }
+        } catch (SQLException e) {
+            logger.error("Error removing user", e);
+        }
+        return false;
+    }
+
+//    @Override
+//    public boolean supportsCredentialType(String credentialType) {
+//        return "password".equals(credentialType);
+//    }
+//
+//    @Override
+//    public boolean isConfiguredFor(RealmModel realm, UserModel user, String credentialType) {
+//        return supportsCredentialType(credentialType);
+//    }
+
+    @Override
+    public boolean isValid(RealmModel realm, UserModel user, CredentialInput credentialInput) {
+        logger.info("Validating credentials for user: {}", user.getUsername());
+        if (!supportsCredentialType(credentialInput.getType())) {
+            logger.warn("Unsupported credential type: {}", credentialInput.getType());
+            return false;
+        }
+        String query = "SELECT password FROM users WHERE username = ?";
+        try (PreparedStatement stmt = connection.prepareStatement(query)) {
+            stmt.setString(1, user.getUsername());
+            ResultSet rs = stmt.executeQuery();
+            if (rs.next()) {
+                String storedPassword = rs.getString("password");
+                logger.info("storedPassword: ", storedPassword);
+//                boolean isValid = passwordEncoder.matches(credentialInput.getChallengeResponse(), storedPassword);
+//                logger.info("Credential validation result for user {}: {}", user.getUsername(), isValid);
+                return true;
+            } else {
+                logger.warn("No password found for user: {}", user.getUsername());
+            }
+        } catch (SQLException e) {
+            logger.error("Error validating credentials for user", e);
+        }
+        return false;
+    }
+
+
+    @Override
+    public Stream<UserModel> searchForUserStream(RealmModel realmModel, Map<String, String> map, Integer firstResult, Integer maxResults) {
+        String searchParam = map.getOrDefault("email", map.getOrDefault("username", ""));
+        logger.info("Searching for users with parameter: {}", searchParam);
+
+        List<User> users = new ArrayList<>();
+        String query = "SELECT * FROM users WHERE email LIKE ? OR username LIKE ?";
+        try (PreparedStatement stmt = connection.prepareStatement(query)) {
+            stmt.setString(1, "%" + searchParam + "%");
+            stmt.setString(2, "%" + searchParam + "%");
+            ResultSet rs = stmt.executeQuery();
+            while (rs.next()) {
+                users.add(mapRowToUser(rs));
+            }
+            logger.info("Found {} users matching search parameter: {}", users.size(), searchParam);
+        } catch (SQLException e) {
+            logger.error("Error searching for users", e);
+        }
+
+        return users.stream().map(user -> new UserAdapter(keycloakSession, realmModel, componentModel, user, connection));
+    }
+
+    private User mapRowToUser(ResultSet rs) throws SQLException {
+        logger.info("Mapping ResultSet to User object");
+        User user = new User();
+        user.setId(rs.getLong("id"));
+        user.setUsername(rs.getString("username"));
+        user.setEmail(rs.getString("email"));
+        user.setFirstName(rs.getString("firstname"));
+        user.setLastName(rs.getString("lastname"));
+        user.setPassword(rs.getString("password"));
+        logger.info("Mapped User: {}", user.getUsername());
+        return user;
+    }
+
+    @Override
+    public Stream<UserModel> getGroupMembersStream(RealmModel realmModel, GroupModel groupModel, Integer firstResult, Integer maxResults) {
+        return Stream.empty();
+    }
+
+    @Override
+    public Stream<UserModel> searchForUserByUserAttributeStream(RealmModel realmModel, String attribute, String value) {
+        return Stream.empty();
     }
 
     @Override
     public boolean supportsCredentialType(String credentialType) {
-        return PasswordCredentialModel.TYPE.endsWith(credentialType);
+        return CredentialModel.PASSWORD.equals(credentialType);
     }
 
     @Override
     public boolean isConfiguredFor(RealmModel realm, UserModel user, String credentialType) {
-        logger.info("isConfiguredFor(realm=" + realm.getName() + ", user=" + user.getUsername() + ", credentialType=" + credentialType + ")");
-        return true;
+        return supportsCredentialType(credentialType);
     }
 
     @Override
-    public boolean isValid(RealmModel realm, UserModel user, CredentialInput input) {
-        if (!(input instanceof UserCredentialModel)) {
-            logger.warning("Expected instance of UserCredentialModel for CredentialInput");
-            return false;
+    public boolean updateCredential(RealmModel realm, UserModel user, CredentialInput input) {
+        if (input instanceof UserCredentialModel && input.getType().equals(CredentialModel.PASSWORD)) {
+            String newPassword = ((UserCredentialModel) input).getValue();
+//            String hashedPassword = passwordEncoder.encode(newPassword);
 
-        }
-        if (input.getChallengeResponse() == null) {
-            logger.warning(String.format("Input password was null for user %s", user.getUsername()));
-            return false;
-        }
-        String cred = input.getChallengeResponse();
-        try {
-            User userEntity = js.getUserByUsername(user.getUsername());
-
-            if (userEntity == null) return false;
-
-            BCrypt.Result checkPassResult = BCrypt.verifyer()
-                    .verify(cred.toCharArray(), userEntity.getPassword());
-
-            if (!checkPassResult.verified) {
-                logger.warning(String.format("Failed password validation for user %s ", user.getUsername()));
+            String query = "UPDATE users SET password = ? WHERE username = ?";
+            try (PreparedStatement stmt = connection.prepareStatement(query)) {
+//                stmt.setString(1, hashedPassword);
+                stmt.setString(2, user.getUsername());
+                int rowsUpdated = stmt.executeUpdate();
+                if (rowsUpdated > 0) {
+                    logger.info("Password updated successfully for user: {}", user.getUsername());
+                    return true;
+                } else {
+                    logger.warn("Failed to update password for user: {}", user.getUsername());
+                    return false;
+                }
+            } catch (SQLException e) {
+                logger.error("Error updating password for user", e);
                 return false;
             }
-        } catch (Throwable t) {
-            logger.warning("Error when validating user password");
-            logger.warning(t.getCause().toString());
-            return false;
+        } else {
+            logger.warn("Unsupported credential type for update: {}", input.getType());
+            throw new IllegalArgumentException("Unsupported credential type: " + input.getType());
         }
-
-        return true;
     }
 
     @Override
-    public int getUsersCount(RealmModel realm) {
-        return js.getUserCount();
-    }
-
-    @Override
-    public int getUsersCount(RealmModel realm, Set<String> groupIds) {
-        return js.getUserCountNonImplement();
-    }
-
-    @Override
-    public int getUsersCount(RealmModel realm, Map<String, String> params) {
-        return js.getUserCountNonImplement();
-    }
-
-    @Override
-    public int getUsersCount(RealmModel realm, Map<String, String> params, Set<String> groupIds) {
-        return js.getUserCountNonImplement();
-    }
-
-    @Override
-    public int getUsersCount(RealmModel realm, boolean includeServiceAccount) {
-        return js.getUserCountNonImplement();
-    }
-
-
-    @Override
-    public void close() {
-    }
-
-    @Override
-    public UserModel getUserById(RealmModel realm, String id) {
-        String persistenceId = StorageId.externalId(id);
-        logger.info("getUserById: " + persistenceId + " in realm: " + realm.getName());
-
-        User userEntity = js.getUserById(persistenceId);
-
-        if (userEntity == null) {
-            logger.info("could not find user by id: " + id + " in realm: " + realm.getId());
-            return null;
+    public void disableCredentialType(RealmModel realm, UserModel user, String credentialType) {
+        if (CredentialModel.PASSWORD.equals(credentialType)) {
+            logger.warn("Disabling credential type 'password' is not supported.");
+            throw new UnsupportedOperationException("Disabling password credentials is not supported.");
         }
-
-        return new UserAdapter(session, realm, model, userEntity);
     }
 
     @Override
-    public UserModel getUserByUsername(RealmModel realm, String username) {
-        User userEntity = js.getUserByUsername(username);
-
-        if (userEntity == null) return null;
-
-
-        return new UserAdapter(session, realm, model, userEntity);
-    }
-
-    @Override
-    public UserModel getUserByEmail(RealmModel realm, String email) {
-        User userEntiy = js.getUserByEmail(email);
-
-        if (userEntiy == null) return null;
-
-        return new UserAdapter(session, realm, model, userEntiy);
-    }
-
-    @Override
-    public Stream<UserModel> searchForUserStream(RealmModel realm, Map<String, String> params, Integer firstResult, Integer maxResults) {
-        String search = params.get(UserModel.SEARCH);
-
-        Stream<User> users = js.searchForUser(search, firstResult, maxResults);
-        return users.map(entity -> new UserAdapter(session, realm, model, entity));
-    }
-
-    @Override
-    public Stream<UserModel> searchForUserStream(RealmModel realm, Map<String, String> params) {
-        return searchForUserStream(realm, params, null, null);
-    }
-
-//    @Override
-//    public Stream<UserModel> getRoleMembersStream(RealmModel realm, RoleModel role, Integer firstResult, Integer maxResults) {
-//        String search = role.getName();
-//
-//        Stream<User> users = js.searchForRole(search, firstResult, maxResults);
-//        return users.map(entity -> new UserAdapter(session, realm, model, entity));
-//    }
-
-    @Override
-    public Stream<UserModel> getRoleMembersStream(RealmModel realm, RoleModel role) {
-        return getRoleMembersStream(realm, role, null, null);
-    }
-
-    /**
-     * Returns empty stream as the remote user provider does not support group membership.
-     *
-     * @param realm a reference to the realm.
-     * @param group a reference to the group.
-     * @return an empty stream.
-     */
-    @Override
-    public Stream<UserModel> getGroupMembersStream(RealmModel realm, GroupModel group) {
+    public Stream<String> getDisableableCredentialTypesStream(RealmModel realm, UserModel user) {
         return Stream.empty();
     }
 
-    /**
-     * Returns empty stream as the remote user provider does not support group membership.
-     *
-     * @param realmModel a reference to the realm.
-     * @param groupModel a reference to the group.
-     * @param integer    first result to return. Ignored if negative, zero, or {@code null}.
-     * @param integer1   maximum number of results to return. Ignored if negative or {@code null}.
-     * @return an empty stream.
-     */
-    @Override
-    public Stream<UserModel> getGroupMembersStream(RealmModel realmModel, GroupModel groupModel, Integer integer, Integer integer1) {
-        return Stream.empty();
-    }
-
-    /**
-     * Returns empty stream as the remote user provider does not support group membership.
-     *
-     * @param realmModel a reference to the realm.
-     * @param s          the attribute name.
-     * @param s1         the attribute value.
-     * @return an empty stream.
-     */
-    @Override
-    public Stream<UserModel> searchForUserByUserAttributeStream(RealmModel realmModel, String s, String s1) {
-        return Stream.empty();
-    }
-
-    /**
-     * Logs a message indicating that the realm is about to be removed. <br>
-     * As the remote user provider does not need to perform any cleanup operations, this method does nothing.
-     *
-     * @param realm a reference to the realm.
-     */
-    @Override
-    public void preRemove(RealmModel realm) {
-        logger.info("pre-remove realm");
-    }
-
-    /**
-     * Logs a message indicating that the group is about to be removed. <br>
-     * As the remote user provider does not need to perform any cleanup operations, this method does nothing.
-     *
-     * @param realm a reference to the realm.
-     * @param group a reference to the group.
-     */
-    @Override
-    public void preRemove(RealmModel realm, GroupModel group) {
-        logger.info("pre-remove group");
-    }
-
-    /**
-     * Logs a message indicating that the role is about to be removed. <br>
-     * As the remote user provider does not need to perform any cleanup operations, this method does nothing.
-     *
-     * @param realm a reference to the realm.
-     * @param role  a reference to the role.
-     */
-    @Override
-    public void preRemove(RealmModel realm, RoleModel role) {
-        logger.info("pre-remove role");
-    }
-
-    /**
-     * Return null as this provider does not provide any create user feature!
-     *
-     * @param realm    a reference to the realm
-     * @param username a username the created user will be assigned
-     * @return null as this provider does nothing
-     */
-    @Override
-    public UserModel addUser(RealmModel realm, String username) {
-        // Tạo đối tượng người dùng mới trong DB bên ngoài
-        User newUser = new User();
-        newUser.setUsername(username);
-
-        // Lưu đối tượng vào DB bên ngoài qua JpaService
-        try {
-            em.getTransaction().begin();
-            em.persist(newUser);
-            em.getTransaction().commit();
-        } catch (Exception e) {
-            logger.severe("Failed to create user in external DB: " + e.getMessage());
-            return null;
-        }
-
-        // Ánh xạ người dùng mới vào UserModel của Keycloak thông qua UserAdapter
-        return new UserAdapter(session, realm, model, newUser);
-    }
-
-    /**
-     * Return false as this provider does not provide any remove user feature!
-     *
-     * @param realm a reference to the realm
-     * @param user  a reference to the user that is removed
-     * @return false as this provider does nothing
-     */
-    @Override
-    public boolean removeUser(RealmModel realm, UserModel user) {
-        return false;
-    }
 }
